@@ -1,7 +1,9 @@
 import os
 import gradio as gr
 from google import genai
+from google.genai import types
 from dotenv import load_dotenv
+from prompts import PRACTICE_PERSONAS
 from prompts import SYSTEM_PROMPT
 
 load_dotenv()
@@ -10,6 +12,12 @@ api_key = os.getenv("GEMINI_API_KEY")
 client = genai.Client(api_key=api_key)
 
 MODEL_NAME = "gemini-2.5-flash"
+
+SCENARIOS = [
+    "Internship / Salary Negotiation",
+    "Product Sales Negotiation",
+    "Real Estate / Property Investment Negotiation",
+]
 
 
 def generate_strategy(scenario, user_details):
@@ -71,26 +79,123 @@ Define the maximum price, minimum salary, or minimum acceptable terms before ent
 """
 
 
-app = gr.Interface(
-    fn=generate_strategy,
-    inputs=[
-        gr.Dropdown(
-            choices=[
-                "Internship / Salary Negotiation",
-                "Product Sales Negotiation",
-                "Real Estate / Property Investment Negotiation"
-            ],
-            label="Choose Negotiation Scenario"
-        ),
-        gr.Textbox(
-            label="Describe your negotiation situation",
-            placeholder="Example: I am buying a property listed for AED 1,500,000 and want to negotiate the price down.",
-            lines=6
-        )
-    ],
-    outputs=gr.Markdown(label="NegotiAI Strategy"),
-    title="NegotiAI",
-    description="Adaptive AI Negotiation & Sales Preparation Platform"
-)
+def start_practice_session(scenario):
+    """
+    Starts a new Gemini chat session using the persona for the chosen
+    scenario. Unlike generate_strategy() above (one isolated call), a chat
+    session remembers every message sent through it — that's what lets the
+    AI stay consistent as a character across a back-and-forth negotiation.
+    """
+    persona_prompt = PRACTICE_PERSONAS[scenario]
 
-app.launch()
+    chat = client.chats.create(
+        model=MODEL_NAME,
+        config=types.GenerateContentConfig(
+            system_instruction=persona_prompt,
+            temperature=0.8,
+        ),
+    )
+    return chat
+
+
+def practice_reply(chat, user_message):
+    """
+    Sends the user's message into an existing chat session and returns the
+    persona's reply. Because `chat` already holds everything said earlier,
+    Gemini sees the full conversation, not just this one message.
+    """
+    try:
+        response = chat.send_message(user_message)
+        return response.text
+    except Exception as e:
+        return f"Something went wrong: {e}"
+
+
+def handle_start(scenario):
+    """
+    Runs when 'Start Practice Session' is clicked. Creates a new chat
+    session, shows a system note confirming it's ready, and reveals the
+    chat box + message input + Send button. Those three stay hidden until
+    this point on purpose — there's nothing to type into before a session
+    actually exists, so a stray message can never get sent into a void.
+    """
+    chat = start_practice_session(scenario)
+    history = [{
+        "role": "system",
+        "content": "Session started. Describe your real situation below (your offer, your target, your background) to begin the negotiation."
+    }]
+    return (
+        chat,
+        gr.update(value=history, visible=True),
+        gr.update(visible=True),
+        gr.update(visible=True),
+    )
+
+
+def handle_send(chat, user_message, history):
+    """
+    Runs when 'Send' is clicked (or Enter is pressed). Sends the user's
+    message into the active session and appends both sides of the exchange
+    to the visible chat history.
+    """
+    if chat is None:
+        history = history + [
+            {"role": "assistant", "content": "Please click **Start Practice Session** first."}
+        ]
+        return history, gr.update(value="")
+
+    if not user_message.strip():
+        return history, gr.update(value="")
+
+    reply = practice_reply(chat, user_message)
+    history = history + [
+        {"role": "user", "content": user_message},
+        {"role": "assistant", "content": reply},
+    ]
+    return history, gr.update(value="")
+
+
+with gr.Blocks(title="NegotiAI") as app:
+    gr.Markdown("# NegotiAI\nAdaptive AI Negotiation & Sales Preparation Platform")
+
+    with gr.Tabs():
+        with gr.Tab("Prepare"):
+            with gr.Row():
+                with gr.Column():
+                    prep_scenario = gr.Dropdown(choices=SCENARIOS, label="Choose Negotiation Scenario")
+                    prep_details = gr.Textbox(
+                        label="Describe your negotiation situation",
+                        placeholder="Example: I am buying a property listed for AED 1,500,000 and want to negotiate the price down.",
+                        lines=6,
+                    )
+                    prep_button = gr.Button("Generate Strategy", variant="primary")
+                with gr.Column():
+                    prep_output = gr.Markdown(label="NegotiAI Strategy")
+
+            prep_button.click(fn=generate_strategy, inputs=[prep_scenario, prep_details], outputs=prep_output)
+
+        with gr.Tab("Practice"):
+            practice_scenario = gr.Dropdown(choices=SCENARIOS, label="Choose Negotiation Scenario")
+            start_button = gr.Button("Start Practice Session", variant="primary")
+
+            chatbot = gr.Chatbot(label="Practice Conversation", visible=False)
+            msg_box = gr.Textbox(
+                label="Your message",
+                placeholder="Type your response and press Enter...",
+                visible=False,
+            )
+            send_button = gr.Button("Send", visible=False)
+
+            chat_state = gr.State(None)
+
+            start_button.click(
+                fn=handle_start,
+                inputs=practice_scenario,
+                outputs=[chat_state, chatbot, msg_box, send_button],
+            )
+            send_button.click(fn=handle_send, inputs=[chat_state, msg_box, chatbot], outputs=[chatbot, msg_box])
+            msg_box.submit(fn=handle_send, inputs=[chat_state, msg_box, chatbot], outputs=[chatbot, msg_box])
+
+
+if __name__ == "__main__":
+    app.launch()
