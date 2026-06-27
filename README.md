@@ -1,7 +1,7 @@
 ---
 title: NegotiAI
 emoji: 🤝
-colorFrom: orange
+colorFrom: yellow
 colorTo: red
 sdk: gradio
 sdk_version: "6.19.0"
