@@ -21,6 +21,21 @@ SCENARIOS = [
     "Real Estate / Property Investment Negotiation",
 ]
 
+# Example placeholder text shown in the Prepare tab, matched to whichever
+# scenario is selected — instead of always showing the real estate example
+# regardless of the dropdown choice.
+SCENARIO_EXAMPLES = {
+    "Internship / Salary Negotiation": "Example: I have an internship offer for AED 3,000 per month and want to negotiate for AED 4,500.",
+    "Product Sales Negotiation": "Example: I am selling a software subscription for AED 12,000 per year and the customer wants a discount.",
+    "Real Estate / Property Investment Negotiation": "Example: I am buying a property listed for AED 1,500,000 and want to negotiate the price down.",
+}
+
+
+def update_prep_placeholder(scenario):
+    """Runs when the Prepare dropdown changes, so the example text always
+    matches the currently selected scenario."""
+    return gr.update(placeholder=SCENARIO_EXAMPLES.get(scenario, ""))
+
 
 def generate_strategy(scenario, user_details):
     if not user_details.strip():
@@ -277,12 +292,15 @@ with gr.Blocks(title="NegotiAI") as app:
                     prep_scenario = gr.Dropdown(choices=SCENARIOS, label="Choose Negotiation Scenario")
                     prep_details = gr.Textbox(
                         label="Describe your negotiation situation",
-                        placeholder="Example: I am buying a property listed for AED 1,500,000 and want to negotiate the price down.",
+                        placeholder=SCENARIO_EXAMPLES[SCENARIOS[0]],
                         lines=6,
                     )
                     prep_button = gr.Button("Generate Strategy", variant="primary")
                 with gr.Column():
                     prep_output = gr.Markdown(label="NegotiAI Strategy")
+
+            prep_scenario.change(fn=update_prep_placeholder, inputs=prep_scenario, outputs=prep_details)
+            prep_button.click(fn=generate_strategy, inputs=[prep_scenario, prep_details], outputs=prep_output)
 
             prep_button.click(fn=generate_strategy, inputs=[prep_scenario, prep_details], outputs=prep_output)
 
