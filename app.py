@@ -1,10 +1,12 @@
 import os
+import json
 import gradio as gr
 from google import genai
 from google.genai import types
 from dotenv import load_dotenv
 from prompts import PRACTICE_PERSONAS
 from prompts import SYSTEM_PROMPT
+from prompts import FEEDBACK_SYSTEM_PROMPT
 
 load_dotenv()
 
@@ -111,6 +113,116 @@ def practice_reply(chat, user_message):
         return f"Something went wrong: {e}"
 
 
+def generate_feedback_report(history):
+    """
+    Takes a Practice Mode conversation (the same list of dicts the Chatbot
+    component uses) and asks Gemini to score the USER's negotiation
+    performance. Returns a plain Python dictionary parsed from Gemini's
+    JSON response — ready for the UI to turn into a scorecard.
+    """
+    history = history or []
+    lines = []
+    for turn in history:
+        role = turn.get("role")
+        content = turn.get("content", "")
+        if role == "user":
+            lines.append(f"User: {content}")
+        elif role == "assistant":
+            lines.append(f"AI Persona: {content}")
+    transcript = "\n".join(lines)
+
+    if not transcript.strip():
+        return {"error": "No conversation to evaluate yet. Practice a negotiation first."}
+
+    try:
+        response = client.models.generate_content(
+            model=MODEL_NAME,
+            contents=transcript,
+            config=types.GenerateContentConfig(
+                system_instruction=FEEDBACK_SYSTEM_PROMPT,
+                temperature=0.3,
+            ),
+        )
+        raw_text = response.text.strip()
+
+        if raw_text.startswith("```"):
+            raw_text = raw_text.strip("`").replace("json\n", "", 1)
+
+        return json.loads(raw_text)
+
+    except Exception as e:
+        return {"error": f"Something went wrong: {e}"}
+
+
+CATEGORY_LABELS = {
+    "confidence": "Confidence",
+    "persuasion": "Persuasion",
+    "objection_handling": "Objection Handling",
+    "communication": "Communication",
+    "emotional_control": "Emotional Control",
+    "closing_effectiveness": "Closing Effectiveness",
+}
+
+
+def render_scorecard_html(feedback):
+    """
+    Turns the dictionary from generate_feedback_report() into an HTML
+    scorecard: one labeled, colored bar per category, plus an overall
+    coaching summary. This is what makes Feedback Mode look like a real
+    report instead of another wall of text.
+    """
+    if "error" in feedback:
+        return f"<p style='color:#e74c3c;'>{feedback['error']}</p>"
+
+    scores = feedback.get("scores", {})
+    notes = feedback.get("notes", {})
+
+    rows_html = ""
+    for key, label in CATEGORY_LABELS.items():
+        score = scores.get(key, 0)
+        note = notes.get(key, "")
+        percent = score * 10  # 1-10 scale -> 0-100%
+
+        if score <= 4:
+            color = "#e74c3c"
+        elif score <= 7:
+            color = "#f39c12"
+        else:
+            color = "#27ae60"
+
+        rows_html += f"""
+        <div style="margin-bottom:14px;">
+            <div style="display:flex; justify-content:space-between; font-weight:600;">
+                <span>{label}</span><span>{score}/10</span>
+            </div>
+            <div style="background:#333; border-radius:6px; height:10px; overflow:hidden;">
+                <div style="background:{color}; width:{percent}%; height:100%;"></div>
+            </div>
+            <div style="font-size:0.85em; color:#aaa; margin-top:4px;">{note}</div>
+        </div>
+        """
+
+    summary = feedback.get("overall_summary", "")
+
+    return f"""
+    <div style="font-family:sans-serif;">
+        {rows_html}
+        <div style="margin-top:16px; padding:12px; background:#222; border-radius:8px;">
+            <strong>Overall:</strong> {summary}
+        </div>
+    </div>
+    """
+
+
+def handle_feedback(history):
+    """
+    Runs when 'Get Feedback Report' is clicked. Scores the current Practice
+    Mode transcript and renders it as a scorecard.
+    """
+    feedback = generate_feedback_report(history)
+    return render_scorecard_html(feedback)
+
+
 def handle_start(scenario):
     """
     Runs when 'Start Practice Session' is clicked. Creates a new chat
@@ -195,6 +307,13 @@ with gr.Blocks(title="NegotiAI") as app:
             )
             send_button.click(fn=handle_send, inputs=[chat_state, msg_box, chatbot], outputs=[chatbot, msg_box])
             msg_box.submit(fn=handle_send, inputs=[chat_state, msg_box, chatbot], outputs=[chatbot, msg_box])
+
+        with gr.Tab("Feedback"):
+            gr.Markdown("Complete a Practice session first, then generate your scorecard here.")
+            feedback_button = gr.Button("Get Feedback Report", variant="primary")
+            feedback_output = gr.HTML()
+
+            feedback_button.click(fn=handle_feedback, inputs=chatbot, outputs=feedback_output)
 
 
 if __name__ == "__main__":
