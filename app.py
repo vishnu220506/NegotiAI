@@ -1,5 +1,6 @@
 import os
 import json
+import time
 import gradio as gr
 from google import genai
 from google.genai import types
@@ -13,7 +14,7 @@ load_dotenv()
 api_key = os.getenv("GEMINI_API_KEY")
 client = genai.Client(api_key=api_key)
 
-MODEL_NAME = "gemini-2.5-flash"
+MODEL_NAME = "gemini-2.5-flash-lite"
 
 SCENARIOS = [
     "Internship / Salary Negotiation",
@@ -35,6 +36,27 @@ def update_prep_placeholder(scenario):
     """Runs when the Prepare dropdown changes, so the example text always
     matches the currently selected scenario."""
     return gr.update(placeholder=SCENARIO_EXAMPLES.get(scenario, ""))
+
+
+def call_with_retry(api_call, max_attempts=3, delay_seconds=5):
+    """
+    Calls a Gemini API function and automatically retries if it fails with
+    a 503 "model overloaded" error — these are short-lived spikes on
+    Google's side, not bugs in our code, so a brief wait usually succeeds.
+    Any other kind of error is raised immediately, since retrying a bad
+    key or a real bug wouldn't help.
+    """
+    last_error = None
+    for attempt in range(max_attempts):
+        try:
+            return api_call()
+        except Exception as e:
+            last_error = e
+            if "503" in str(e) or "UNAVAILABLE" in str(e):
+                time.sleep(delay_seconds)
+                continue
+            raise
+    raise last_error
 
 
 def generate_strategy(scenario, user_details):
@@ -59,12 +81,13 @@ Provide a structured negotiation preparation plan with:
 """
 
     try:
-        response = client.models.generate_content(
+        response = call_with_retry(lambda: client.models.generate_content(
             model=MODEL_NAME,
             contents=prompt,
-        )
+        ))
         return response.text
     except Exception as e:
+        print(e)
         return f"""
 ## NegotiAI Strategy Report
 
@@ -122,7 +145,7 @@ def practice_reply(chat, user_message):
     Gemini sees the full conversation, not just this one message.
     """
     try:
-        response = chat.send_message(user_message)
+        response = call_with_retry(lambda: chat.send_message(user_message))
         return response.text
     except Exception as e:
         return f"Something went wrong: {e}"
@@ -150,14 +173,14 @@ def generate_feedback_report(history):
         return {"error": "No conversation to evaluate yet. Practice a negotiation first."}
 
     try:
-        response = client.models.generate_content(
+        response = call_with_retry(lambda: client.models.generate_content(
             model=MODEL_NAME,
             contents=transcript,
             config=types.GenerateContentConfig(
                 system_instruction=FEEDBACK_SYSTEM_PROMPT,
                 temperature=0.3,
             ),
-        )
+        ))
         raw_text = response.text.strip()
 
         if raw_text.startswith("```"):
@@ -300,8 +323,6 @@ with gr.Blocks(title="NegotiAI") as app:
                     prep_output = gr.Markdown(label="NegotiAI Strategy")
 
             prep_scenario.change(fn=update_prep_placeholder, inputs=prep_scenario, outputs=prep_details)
-            prep_button.click(fn=generate_strategy, inputs=[prep_scenario, prep_details], outputs=prep_output)
-
             prep_button.click(fn=generate_strategy, inputs=[prep_scenario, prep_details], outputs=prep_output)
 
         with gr.Tab("Practice"):
