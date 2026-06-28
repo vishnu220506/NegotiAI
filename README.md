@@ -8,65 +8,60 @@ sdk_version: "6.19.0"
 app_file: app.py
 pinned: false
 ---
+
 # NegotiAI — Adaptive AI Negotiation & Sales Preparation Platform
 
-NegotiAI helps users **prepare before** important real-world negotiations —
-internship/salary offers, product sales, and real estate/property deals.
+NegotiAI helps users prepare before important real-world negotiations, including internship or salary offers, product sales, and real estate or property deals.
 
-It does not negotiate on your behalf. Think of it like a flight simulator:
-you prepare, practice, and get scored before the real conversation.
+It does not negotiate on the user's behalf. It works like a flight simulator for negotiation: users prepare, practise, and receive feedback before the real conversation.
 
-Built for the Decoding Data Science (DDS) Academy AI Application Building
-Challenge.
+Built for the Decoding Data Science Academy Build AI Application Challenge.
+
+## Live App
+
+Hugging Face Spaces:  
+https://huggingface.co/spaces/vishnu220506/NegotiAI
+
+## GitHub Repository
+
+https://github.com/vishnu220506/NegotiAI
 
 ## Features
 
 | Feature | Status |
 | --- | --- |
-| **Prepare** — strategy, objections, responses, walk-away point, confidence tips | ✅ Working |
-| **Practice** — live negotiation against an AI persona (recruiter, customer, or property seller), with full conversation memory | ✅ Working |
-| **Feedback** — scored visual scorecard (confidence, persuasion, objection handling, communication, emotional control, closing) generated from your actual Practice conversation | ✅ Working |
+| Prepare Mode — strategy, objections, responses, walk-away point, confidence tips | Working |
+| Practice Mode — live negotiation against an AI persona with conversation memory | Working |
+| Feedback Mode — scored visual scorecard based on the user's practice conversation | Working |
+
+## MVP Scenarios
+
+1. Internship / Salary Negotiation
+2. Product Sales Negotiation
+3. Real Estate / Property Investment Negotiation
 
 ## Tech Stack
 
-- **Language:** Python
-- **UI + Backend:** [Gradio](https://gradio.app) (`gr.Blocks` + `gr.Tabs`, single Python app, no separate frontend/backend)
-- **AI:** Google Gemini API (`gemini-2.5-flash`) via the official `google-genai` SDK
-- **Secrets:** `.env` locally / Hugging Face Secrets when deployed (never committed)
-- **Deployment:** Hugging Face Spaces
+- Language: Python
+- UI and backend: Gradio using `gr.Blocks` and `gr.Tabs`
+- AI model: Google Gemini API using `gemini-2.5-flash-lite`
+- SDK: `google-genai`
+- Secrets: `.env` locally and Hugging Face Secrets when deployed
+- Deployment: Hugging Face Spaces
+- Version control: GitHub
 
 ## Project Structure
 
-- `app.py` — Gradio UI (3 tabs) + all app logic
-- `prompts.py` — All AI system prompts, kept separate from app logic
+- `app.py` — Gradio UI, Prepare Mode, Practice Mode, Feedback Mode, API calls, and error handling
+- `prompts.py` — system prompts, practice personas, and feedback scoring prompt
 - `requirements.txt` — Python dependencies
-- `.env.example` — Template for your API key (copy to `.env`, never commit `.env`)
-- `.gitignore`
+- `.env.example` — safe template for the Gemini API key
+- `.gitignore` — prevents secrets and virtual environment files from being committed
 
-## Setup (Windows 10, Python 3.14.5)
+## Setup
 
-1. **Get a free Gemini API key:** [Google AI Studio](https://aistudio.google.com) → "Get API key."
-2. **Create and activate a virtual environment:** `py -3.14 -m venv .venv` then `.venv\Scripts\activate`
-3. **Install dependencies:** `pip install -r requirements.txt`
-4. **Add your API key:** copy `.env.example` to `.env`, then set `GEMINI_API_KEY=your_real_key_here`
-5. **Run the app:** `python app.py`, then open the local URL shown in the terminal (usually `http://127.0.0.1:7860`). Three tabs: **Prepare**, **Practice**, **Feedback**.
+1. Create a Gemini API key from Google AI Studio.
+2. Create a virtual environment:
 
-## How to use it
-
-1. **Prepare** — pick a scenario, describe your situation, get a structured strategy.
-2. **Practice** — pick a scenario, click "Start Practice Session," then negotiate against the AI persona in real time.
-3. **Feedback** — after a Practice conversation, click "Get Feedback Report" to get a scored scorecard based on what you actually said.
-
-## Roadmap
-
-- [x] Environment setup + Preparation Mode
-- [x] Practice Mode (multi-turn AI persona negotiation)
-- [x] Feedback Report (structured scoring + visual scorecard)
-- [ ] Deploy to Hugging Face Spaces (in progress)
-- [ ] Re-add Reset/Clear button (lost when migrating to `gr.Blocks`)
-- [ ] Demo video + slides
-- [ ] Final submission
-
-## Disclaimer
-
-NegotiAI is a preparation and coaching tool. It does not replace human judgment or professional/legal advice during real negotiations.
+```powershell
+py -3.14 -m venv .venv

@@ -22,9 +22,6 @@ SCENARIOS = [
     "Real Estate / Property Investment Negotiation",
 ]
 
-# Example placeholder text shown in the Prepare tab, matched to whichever
-# scenario is selected — instead of always showing the real estate example
-# regardless of the dropdown choice.
 SCENARIO_EXAMPLES = {
     "Internship / Salary Negotiation": "Example: I have an internship offer for AED 3,000 per month and want to negotiate for AED 4,500.",
     "Product Sales Negotiation": "Example: I am selling a software subscription for AED 12,000 per year and the customer wants a discount.",
@@ -33,33 +30,59 @@ SCENARIO_EXAMPLES = {
 
 
 def update_prep_placeholder(scenario):
-    """Runs when the Prepare dropdown changes, so the example text always
-    matches the currently selected scenario."""
     return gr.update(placeholder=SCENARIO_EXAMPLES.get(scenario, ""))
 
 
 def call_with_retry(api_call, max_attempts=3, delay_seconds=5):
     """
-    Calls a Gemini API function and automatically retries if it fails with
-    a 503 "model overloaded" error — these are short-lived spikes on
-    Google's side, not bugs in our code, so a brief wait usually succeeds.
-    Any other kind of error is raised immediately, since retrying a bad
-    key or a real bug wouldn't help.
+    Calls a Gemini API function and retries only for temporary 503/unavailable errors.
+    Quota errors, API key errors, and real code errors are not retried repeatedly.
     """
     last_error = None
+
     for attempt in range(max_attempts):
         try:
             return api_call()
         except Exception as e:
             last_error = e
-            if "503" in str(e) or "UNAVAILABLE" in str(e):
+            error_text = str(e).lower()
+
+            if "503" in error_text or "unavailable" in error_text or "overloaded" in error_text:
                 time.sleep(delay_seconds)
                 continue
+
             raise
+
     raise last_error
 
 
+def friendly_api_error(error):
+    """
+    Converts technical Gemini/API errors into short, professional messages.
+    This prevents raw API errors from appearing in the demo UI.
+    """
+    error_text = str(error)
+    lower_text = error_text.lower()
+
+    if "429" in error_text or "resource_exhausted" in lower_text or "quota" in lower_text:
+        return (
+            "AI service is temporarily unavailable because the free Gemini API limit "
+            "has been reached. Please try again later."
+        )
+
+    if "503" in error_text or "unavailable" in lower_text or "overloaded" in lower_text:
+        return "AI service is temporarily busy. Please wait a moment and try again."
+
+    if "api_key" in lower_text or "permission" in lower_text or "unauthenticated" in lower_text:
+        return "AI service is not configured correctly. Please check the API key setup."
+
+    return "AI service is temporarily unavailable. Please try again later."
+
+
 def generate_strategy(scenario, user_details):
+    if not scenario:
+        return "Please choose a negotiation scenario first."
+
     if not user_details.strip():
         return "Please describe your negotiation situation first."
 
@@ -81,50 +104,25 @@ Provide a structured negotiation preparation plan with:
 """
 
     try:
-        response = call_with_retry(lambda: client.models.generate_content(
-            model=MODEL_NAME,
-            contents=prompt,
-        ))
+        response = call_with_retry(
+            lambda: client.models.generate_content(
+                model=MODEL_NAME,
+                contents=prompt,
+            )
+        )
         return response.text
+
     except Exception as e:
-        print(e)
         return f"""
-## NegotiAI Strategy Report
+## Unable to generate strategy
 
-### 1. Situation Summary
-You are preparing for a {scenario}. Your goal is to negotiate professionally while protecting your target outcome.
-
-### 2. Recommended Strategy
-Start by showing respect for the other party's position, then explain your reasoning clearly. Focus on value, evidence, and alternatives rather than pressure.
-
-### 3. Likely Objections
-- "The price or offer is fixed."
-- "There are other interested buyers or candidates."
-- "This is already the best available offer."
-
-### 4. Suggested Responses
-- "I understand your position. Based on my budget and market comparison, I would like to explore whether there is flexibility."
-- "I am serious about moving forward, but I need the final terms to make financial sense."
-- "If the price cannot move, could we discuss added value, payment terms, or other concessions?"
-
-### 5. Walk-Away Point
-Define the maximum price, minimum salary, or minimum acceptable terms before entering the negotiation. Do not decide emotionally during the discussion.
-
-### 6. Confidence Tips
-- Stay calm.
-- Ask questions before making concessions.
-- Do not accept immediately.
-- Use silence strategically.
-- Be ready to walk away politely.
+{friendly_api_error(e)}
 """
 
 
 def start_practice_session(scenario):
     """
-    Starts a new Gemini chat session using the persona for the chosen
-    scenario. Unlike generate_strategy() above (one isolated call), a chat
-    session remembers every message sent through it — that's what lets the
-    AI stay consistent as a character across a back-and-forth negotiation.
+    Starts a new Gemini chat session using the persona for the chosen scenario.
     """
     persona_prompt = PRACTICE_PERSONAS[scenario]
 
@@ -135,52 +133,55 @@ def start_practice_session(scenario):
             temperature=0.8,
         ),
     )
+
     return chat
 
 
 def practice_reply(chat, user_message):
     """
-    Sends the user's message into an existing chat session and returns the
-    persona's reply. Because `chat` already holds everything said earlier,
-    Gemini sees the full conversation, not just this one message.
+    Sends the user's message into an existing Gemini chat session.
     """
     try:
         response = call_with_retry(lambda: chat.send_message(user_message))
         return response.text
+
     except Exception as e:
-        return f"Something went wrong: {e}"
+        return friendly_api_error(e)
 
 
 def generate_feedback_report(history):
     """
-    Takes a Practice Mode conversation (the same list of dicts the Chatbot
-    component uses) and asks Gemini to score the USER's negotiation
-    performance. Returns a plain Python dictionary parsed from Gemini's
-    JSON response — ready for the UI to turn into a scorecard.
+    Scores the user's Practice Mode conversation.
     """
     history = history or []
     lines = []
+
     for turn in history:
         role = turn.get("role")
         content = turn.get("content", "")
+
         if role == "user":
             lines.append(f"User: {content}")
         elif role == "assistant":
             lines.append(f"AI Persona: {content}")
+
     transcript = "\n".join(lines)
 
     if not transcript.strip():
         return {"error": "No conversation to evaluate yet. Practice a negotiation first."}
 
     try:
-        response = call_with_retry(lambda: client.models.generate_content(
-            model=MODEL_NAME,
-            contents=transcript,
-            config=types.GenerateContentConfig(
-                system_instruction=FEEDBACK_SYSTEM_PROMPT,
-                temperature=0.3,
-            ),
-        ))
+        response = call_with_retry(
+            lambda: client.models.generate_content(
+                model=MODEL_NAME,
+                contents=transcript,
+                config=types.GenerateContentConfig(
+                    system_instruction=FEEDBACK_SYSTEM_PROMPT,
+                    temperature=0.3,
+                ),
+            )
+        )
+
         raw_text = response.text.strip()
 
         if raw_text.startswith("```"):
@@ -189,7 +190,7 @@ def generate_feedback_report(history):
         return json.loads(raw_text)
 
     except Exception as e:
-        return {"error": f"Something went wrong: {e}"}
+        return {"error": friendly_api_error(e)}
 
 
 CATEGORY_LABELS = {
@@ -204,22 +205,25 @@ CATEGORY_LABELS = {
 
 def render_scorecard_html(feedback):
     """
-    Turns the dictionary from generate_feedback_report() into an HTML
-    scorecard: one labeled, colored bar per category, plus an overall
-    coaching summary. This is what makes Feedback Mode look like a real
-    report instead of another wall of text.
+    Turns the feedback dictionary into an HTML scorecard.
     """
     if "error" in feedback:
-        return f"<p style='color:#e74c3c;'>{feedback['error']}</p>"
+        return f"""
+        <div style="padding:14px; background:#2b1d1d; border:1px solid #e74c3c; border-radius:8px;">
+            <strong style="color:#ffb3b3;">Feedback unavailable</strong>
+            <p style="color:#f2f2f2; margin-top:8px;">{feedback['error']}</p>
+        </div>
+        """
 
     scores = feedback.get("scores", {})
     notes = feedback.get("notes", {})
 
     rows_html = ""
+
     for key, label in CATEGORY_LABELS.items():
         score = scores.get(key, 0)
         note = notes.get(key, "")
-        percent = score * 10  # 1-10 scale -> 0-100%
+        percent = score * 10
 
         if score <= 4:
             color = "#e74c3c"
@@ -253,27 +257,47 @@ def render_scorecard_html(feedback):
 
 
 def handle_feedback(history):
-    """
-    Runs when 'Get Feedback Report' is clicked. Scores the current Practice
-    Mode transcript and renders it as a scorecard.
-    """
     feedback = generate_feedback_report(history)
     return render_scorecard_html(feedback)
 
 
 def handle_start(scenario):
     """
-    Runs when 'Start Practice Session' is clicked. Creates a new chat
-    session, shows a system note confirming it's ready, and reveals the
-    chat box + message input + Send button. Those three stay hidden until
-    this point on purpose — there's nothing to type into before a session
-    actually exists, so a stray message can never get sent into a void.
+    Starts Practice Mode safely. If Gemini cannot start, the app shows a short
+    professional message instead of crashing or showing raw technical errors.
     """
-    chat = start_practice_session(scenario)
+    if not scenario:
+        history = [{
+            "role": "assistant",
+            "content": "Please choose a negotiation scenario first."
+        }]
+        return (
+            None,
+            gr.update(value=history, visible=True),
+            gr.update(visible=False),
+            gr.update(visible=False),
+        )
+
+    try:
+        chat = start_practice_session(scenario)
+
+    except Exception as e:
+        history = [{
+            "role": "assistant",
+            "content": friendly_api_error(e)
+        }]
+        return (
+            None,
+            gr.update(value=history, visible=True),
+            gr.update(visible=False),
+            gr.update(visible=False),
+        )
+
     history = [{
         "role": "system",
-        "content": "Session started. Describe your real situation below (your offer, your target, your background) to begin the negotiation."
+        "content": "Session started. Describe your real situation below, including your offer, target, and background, to begin the negotiation."
     }]
+
     return (
         chat,
         gr.update(value=history, visible=True),
@@ -284,13 +308,13 @@ def handle_start(scenario):
 
 def handle_send(chat, user_message, history):
     """
-    Runs when 'Send' is clicked (or Enter is pressed). Sends the user's
-    message into the active session and appends both sides of the exchange
-    to the visible chat history.
+    Sends a user message in Practice Mode and appends the AI persona reply.
     """
+    history = history or []
+
     if chat is None:
         history = history + [
-            {"role": "assistant", "content": "Please click **Start Practice Session** first."}
+            {"role": "assistant", "content": "Please click Start Practice Session first."}
         ]
         return history, gr.update(value="")
 
@@ -298,10 +322,12 @@ def handle_send(chat, user_message, history):
         return history, gr.update(value="")
 
     reply = practice_reply(chat, user_message)
+
     history = history + [
         {"role": "user", "content": user_message},
         {"role": "assistant", "content": reply},
     ]
+
     return history, gr.update(value="")
 
 
@@ -312,21 +338,39 @@ with gr.Blocks(title="NegotiAI") as app:
         with gr.Tab("Prepare"):
             with gr.Row():
                 with gr.Column():
-                    prep_scenario = gr.Dropdown(choices=SCENARIOS, label="Choose Negotiation Scenario")
+                    prep_scenario = gr.Dropdown(
+                        choices=SCENARIOS,
+                        label="Choose Negotiation Scenario",
+                        value=SCENARIOS[0],
+                    )
                     prep_details = gr.Textbox(
                         label="Describe your negotiation situation",
                         placeholder=SCENARIO_EXAMPLES[SCENARIOS[0]],
                         lines=6,
                     )
                     prep_button = gr.Button("Generate Strategy", variant="primary")
+
                 with gr.Column():
                     prep_output = gr.Markdown(label="NegotiAI Strategy")
 
-            prep_scenario.change(fn=update_prep_placeholder, inputs=prep_scenario, outputs=prep_details)
-            prep_button.click(fn=generate_strategy, inputs=[prep_scenario, prep_details], outputs=prep_output)
+            prep_scenario.change(
+                fn=update_prep_placeholder,
+                inputs=prep_scenario,
+                outputs=prep_details,
+            )
+
+            prep_button.click(
+                fn=generate_strategy,
+                inputs=[prep_scenario, prep_details],
+                outputs=prep_output,
+            )
 
         with gr.Tab("Practice"):
-            practice_scenario = gr.Dropdown(choices=SCENARIOS, label="Choose Negotiation Scenario")
+            practice_scenario = gr.Dropdown(
+                choices=SCENARIOS,
+                label="Choose Negotiation Scenario",
+                value=SCENARIOS[0],
+            )
             start_button = gr.Button("Start Practice Session", variant="primary")
 
             chatbot = gr.Chatbot(label="Practice Conversation", visible=False)
@@ -344,15 +388,29 @@ with gr.Blocks(title="NegotiAI") as app:
                 inputs=practice_scenario,
                 outputs=[chat_state, chatbot, msg_box, send_button],
             )
-            send_button.click(fn=handle_send, inputs=[chat_state, msg_box, chatbot], outputs=[chatbot, msg_box])
-            msg_box.submit(fn=handle_send, inputs=[chat_state, msg_box, chatbot], outputs=[chatbot, msg_box])
+
+            send_button.click(
+                fn=handle_send,
+                inputs=[chat_state, msg_box, chatbot],
+                outputs=[chatbot, msg_box],
+            )
+
+            msg_box.submit(
+                fn=handle_send,
+                inputs=[chat_state, msg_box, chatbot],
+                outputs=[chatbot, msg_box],
+            )
 
         with gr.Tab("Feedback"):
             gr.Markdown("Complete a Practice session first, then generate your scorecard here.")
             feedback_button = gr.Button("Get Feedback Report", variant="primary")
             feedback_output = gr.HTML()
 
-            feedback_button.click(fn=handle_feedback, inputs=chatbot, outputs=feedback_output)
+            feedback_button.click(
+                fn=handle_feedback,
+                inputs=chatbot,
+                outputs=feedback_output,
+            )
 
 
 if __name__ == "__main__":
